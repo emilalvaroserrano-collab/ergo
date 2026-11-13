@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Ergo-V3 Control Panel</title>
+  <link rel="icon" href="icons/icon.svg" />
+  <style>
+    :root { --bg:#0b0f14; --panel:#121826; --line:#263044; --text:#e8eef8; --muted:#9fb0c8; --accent:#ff7a18; --ok:#3ddc97; --bad:#ff6b6b; }
+    * { box-sizing: border-box; }
+    body { margin:0; font:14px/1.4 system-ui,-apple-system,Segoe UI,sans-serif; background:var(--bg); color:var(--text); }
+    header { position:sticky; top:0; z-index:2; background:rgba(11,15,20,.92); backdrop-filter:blur(8px); border-bottom:1px solid var(--line); padding:12px 16px; display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+    h1 { font-size:16px; margin:0 8px 0 0; }
+    .brand-logo { display:block; height:18px; width:auto; }
+    .brand-version { padding:1px 5px; border:1px solid var(--line); border-radius:999px; font-size:10.5px; font-weight:600; line-height:1.3; letter-spacing:.08em; color:var(--muted); }
+    a { color:#8fd3ff; }
+    main { display:grid; grid-template-columns: 1.1fr .9fr; gap:16px; padding:16px; }
+    @media (max-width: 1000px){ main{ grid-template-columns:1fr; } }
+    section { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px; }
+    h2 { font-size:14px; margin:0 0 10px; }
+    .row { display:grid; grid-template-columns: repeat(auto-fit,minmax(150px,1fr)); gap:8px; margin-bottom:8px; }
+    label { display:flex; flex-direction:column; gap:4px; color:var(--muted); font-size:12px; }
+    input, select, textarea, button { font:inherit; color:var(--text); background:#0e1420; border:1px solid var(--line); border-radius:8px; padding:8px; }
+    textarea { min-height:140px; resize:vertical; }
+    .inline { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+    .inline label { flex-direction:row; align-items:center; gap:6px; color:var(--text); }
+    button { cursor:pointer; background:#182235; }
+    button.primary { background:var(--accent); color:#111; border-color:#ff9a4d; font-weight:600; }
+    button:disabled { opacity:.5; cursor:not-allowed; }
+    pre { white-space:pre-wrap; word-break:break-word; background:#0a101a; border:1px solid var(--line); border-radius:8px; padding:10px; max-height:320px; overflow:auto; margin:8px 0 0; }
+    .muted { color:var(--muted); }
+    .status.ok { color:var(--ok); } .status.bad { color:var(--bad); }
+    audio { width:100%; margin-top:8px; }
+    .pill { font-size:12px; color:var(--muted); border:1px solid var(--line); border-radius:999px; padding:4px 8px; }
+  </style>
+</head>
+<body>
+  <header>
+    <img class="brand-logo" src="logo/ergo-wordmark.png" alt="Ergo" />
+    <span class="brand-version">V3</span>
+    <h1>Control Panel</h1>
+    <label>Base URL <input id="base" value="" placeholder="same origin (e.g. http://127.0.0.1:7453)" size="34"></label>
+    <button id="refresh">Refresh server</button>
+    <a id="studioLink" href="/studio" target="_blank" rel="noopener">Open built-in Studio</a>
+    <a id="liteLink" href="/lite" target="_blank" rel="noopener">Open Lite</a>
+    <span id="conn" class="pill">not connected</span>
+  </header>
+  <main>
+    <section>
+      <h2>Generate (/v2/generate)</h2>
+      <label>Text <textarea id="text">Hello from Ergo-V3. This frontend exposes the v2 API languages and generation options.</textarea></label>
+      <div class="row">
+        <label>Language (all server languages)
+          <select id="language"></select>
+        </label>
+        <label>Speaker (GET /v2/speakers)
+          <select id="speaker"><option value="">(none)</option></select>
+        </label>
+        <label>Speaker mode
+          <select id="speaker_mode"><option value="">(server default)</option><option value="embedding">embedding</option><option value="reference">reference</option></select>
+        </label>
+        <label>Decoder
+          <select id="decoder"><option value="">(server default)</option></select>
+        </label>
+      </div>
+      <div class="row">
+        <label>Format <select id="format"><option value="wav">wav (buffered)</option><option value="pcm">pcm (streamed)</option></select></label>
+        <label>Stream decode <select id="stream_decode"><option value="">(default)</option><option value="prefix">prefix</option><option value="whole">whole</option></select></label>
+        <label>Seed (blank = server) <input id="seed" type="number" min="0" max="4294967295" placeholder="random"></label>
+        <label>Max tokens <input id="max_tokens" type="number" min="1" placeholder="(default)"></label>
+      </div>
+      <div class="row">
+        <label>Temperature <input id="temperature" type="number" step="0.01" value="0.75"></label>
+        <label>Top-k <input id="topk" type="number" step="1" value="80"></label>
+        <label>Top-p <input id="top_p" type="number" step="0.01" value="0.69"></label>
+        <label>Min-p <input id="min_p" type="number" step="0.01" value="0"></label>
+      </div>
+      <div class="row">
+        <label>Repetition penalty <input id="repetition_penalty" type="number" step="0.1" value="2.4"></label>
+        <label>Repetition window <input id="repetition_window" type="number" step="1" value="96"></label>
+        <label>Repetition codebooks <input id="repetition_codebooks" type="number" step="1" value="6"></label>
+        <label>Fade out ms <input id="fade_out_ms" type="number" step="1" value="0"></label>
+      </div>
+      <div class="row">
+        <label>Silence prefill frames <input id="silence_prefill_frames" type="number" step="1" placeholder="(server default)"></label>
+        <label>Decode context frames <input id="decode_context_frames" type="number" step="1" value="30"></label>
+        <label>Headroom dB <input id="headroom_db" type="number" step="0.1" min="0" max="24" placeholder="(decoder default)"></label>
+        <label>Stream codebooks <input id="stream_codebooks" type="number" step="1" min="1" value="1"></label>
+      </div>
+      <div class="row">
+        <label>Stream codebooks scope <select id="stream_codebooks_scope"><option value="first">first</option><option value="all">all</option></select></label>
+        <label>Speaker CFG scale <input id="speaker_cfg_scale" type="number" step="0.1" value="1"></label>
+        <label>Controls CFG scale <input id="controls_cfg_scale" type="number" step="0.1" value="1"></label>
+        <label>Tag CFG scale <input id="tag_cfg_scale" type="number" step="0.1" min="1" max="4" value="1"></label>
+      </div>
+      <div class="row">
+        <label>Accent <input id="accent" placeholder="(adapter name, if loaded)"></label>
+        <label>Accent strength <input id="accent_strength" type="number" step="0.1" value="1"></label>
+        <label>Control span rate <input id="control_span_rate" type="number" step="0.01" placeholder="(default 1.0)"></label>
+        <label>Control span follow <select id="control_span_follow"><option value="rate">rate</option><option value="reading">reading</option></select></label>
+      </div>
+      <div class="row">
+        <label>Control span lead <input id="control_span_lead" type="number" step="0.1" min="0" max="8" placeholder=""></label>
+        <label>Control span lag <input id="control_span_lag" type="number" step="0.1" min="-4" max="8" placeholder=""></label>
+        <label>Speaker blend A id <input id="speaker_blend_embedding_id_a" placeholder=""></label>
+        <label>Speaker blend B id / t <div class="inline"><input id="speaker_blend_embedding_id_b" placeholder="id b" style="flex:1"><input id="speaker_blend_t" type="number" step="0.01" min="0" max="1" placeholder="t" style="width:90px"></div></label>
+      </div>
+      <div class="inline" style="margin:8px 0">
+        <label><input id="text_normalization" type="checkbox" checked> text normalization</label>
+        <label><input id="decode_context" type="checkbox"> decode context</label>
+        <label><input id="laci" type="checkbox"> LACI</label>
+      </div>
+      <label>Reference audio (speaker_audio_base64) <input id="speaker_audio" type="file" accept="audio/*"></label>
+      <label>Speaker embedding file .npy/.npz (speaker_embedding_base64) <input id="speaker_embedding_file" type="file" accept=".npy,.npz"></label>
+      <label>Controls JSON (object: {"set.direction": dose}, or null)
+        <textarea id="controls" spellcheck="false" placeholder='{"mood.valence": 2, "mood.arousal": 1}'></textarea></label>
+      <label>Control spans JSON (array of {start,end,controls}, code-point offsets)
+        <textarea id="control_spans" spellcheck="false" placeholder='[{"start":0,"end":5,"controls":{"delivery.whisper":2}}]'></textarea></label>
+      <label>Condition buckets JSON (object/list/null) <input id="condition_buckets" placeholder='{"loudness":null,"fmax":null,"speaking_rate":null}'></label>
+      <label>Condition values JSON (object/list/null) <input id="condition_values" placeholder='null'></label>
+      <div class="inline" style="margin-top:10px">
+        <button id="generate" class="primary">Generate</button>
+        <button id="saveWav" disabled>Download result</button>
+        <span id="genStatus" class="muted"></span>
+      </div>
+      <audio id="player" controls></audio>
+      <pre id="genLog" class="muted">Ready.</pre>
+    </section>
+
+    <section>
+      <h2>Server state</h2>
+      <div class="inline" style="margin-bottom:8px">
+        <span class="muted">Languages: all 44 registry codes (43 languages, US/UK English) are available in the selector. Feature availability comes from /v2/capabilities.</span>
+      </div>
+      <label>Health / capabilities</label>
+      <pre id="caps">(refresh to load)</pre>
+      <label>Speakers</label>
+      <pre id="speakers">(refresh to load)</pre>
+      <label>Controls (/v2/controls, if served)</label>
+      <pre id="controlsDoc">(refresh to load)</pre>
+    </section>
+  </main>
+
+<script>
+// The 44 server codes of model/src/zonos3/registries/languages.json (43 languages; en_us and en_gb are separate codes).
+const SERVER_LANGUAGES = [
+  ["English", [["en_us","US English"],["en_gb","UK English"]]],
+  ["Western & Southern Europe", [["fr_fr","French"],["de","German"],["es","Spanish"],["it","Italian"],["pt_br","Portuguese"],["nl","Dutch"],["el","Greek"]]],
+  ["Northern Europe", [["sv","Swedish"],["da","Danish"],["no","Norwegian"],["fi","Finnish"]]],
+  ["Central & Eastern Europe", [["pl","Polish"],["cs","Czech"],["sk","Slovak"],["hu","Hungarian"],["ro","Romanian"],["bg","Bulgarian"],["ru","Russian"],["uk","Ukrainian"]]],
+  ["Middle East & Caucasus", [["tr","Turkish"],["ar","Arabic"],["he","Hebrew"],["ka","Georgian"]]],
+  ["East Asia", [["cmn","Mandarin"],["ja","Japanese"],["ko","Korean"]]],
+  ["Southeast Asia", [["vi","Vietnamese"],["id","Indonesian"],["ms","Malay"],["th","Thai"],["tl","Tagalog (Filipino)"]]],
+  ["South Asia", [["hi","Hindi"],["bn","Bengali"],["ta","Tamil"],["te","Telugu"],["mr","Marathi"],["gu","Gujarati"],["kn","Kannada"],["ml","Malayalam"],["pa","Punjabi"],["or","Odia"],["ur","Urdu"]]]
+];
+const langSel = document.getElementById('language');
+for (const [group, langs] of SERVER_LANGUAGES) {
+  const g = document.createElement('optgroup'); g.label = group;
+  for (const [code,label] of langs) {
+    const o = document.createElement('option'); o.value = code; o.textContent = `${label} (${code})`; g.appendChild(o);
+  }
+  langSel.appendChild(g);
+}
+const $ = (id) => document.getElementById(id);
+if (!$('base').value && location.port !== '7453') $('base').value = 'http://127.0.0.1:7453';
+let lastBlob = null, lastName = 'ergo-v3-output.wav';
+
+function baseUrl() { return ($('base').value || location.origin).replace(/\/$/, ''); }
+function syncLinks() {
+  const b = baseUrl();
+  $('studioLink').href = b + '/studio';
+  $('liteLink').href = b + '/lite';
+}
+function log(msg, cls='muted') { const el=$('genLog'); el.textContent = msg; el.className = cls; }
+function num(id) { const v=$(id).value; return v === '' ? null : Number(v); }
+function str(id) { const v=$(id).value.trim(); return v === '' ? null : v; }
+function jsonField(id, fallback=null) {
+  const v=$(id).value.trim(); if (!v) return fallback;
+  try { return JSON.parse(v); } catch(e){ throw new Error(id + ': invalid JSON - ' + e.message); }
+}
+async function fileB64(input) {
+  const f = input.files && input.files[0]; if (!f) return null;
+  const buf = await f.arrayBuffer();
+  let bin=''; const bytes=new Uint8Array(buf); const chunk=0x8000;
+  for (let i=0;i<bytes.length;i+=chunk) bin += String.fromCharCode(...bytes.subarray(i,i+chunk));
+  return btoa(bin);
+}
+
+async function getJson(url) {
+  const res = await fetch(url);
+  const type = res.headers.get('content-type') || '';
+  if (!res.ok || !type.includes('json')) throw new Error(`No Ergo-V3 server at ${baseUrl()} (HTTP ${res.status})`);
+  return res.json();
+}
+
+async function refresh() {
+  const b = baseUrl();
+  $('conn').textContent = 'connecting…'; $('conn').className = 'pill';
+  try {
+    const [h, c, s] = await Promise.all([
+      getJson(b+'/v2/health'),
+      getJson(b+'/v2/capabilities'),
+      getJson(b+'/v2/speakers').catch(()=>({speakers:[]})),
+    ]);
+    $('caps').textContent = JSON.stringify({health:h, capabilities:c}, null, 2);
+    $('speakers').textContent = JSON.stringify(s, null, 2);
+    const dec = $('decoder'); const keep = dec.value;
+    dec.innerHTML = '<option value="">(server default)</option>';
+    for (const d of (c.decoders||[])) { const o=document.createElement('option'); o.value=d.id; o.textContent=`${d.id} - ${d.label||d.id}`; dec.appendChild(o); }
+    if (keep) dec.value = keep;
+    const sp = $('speaker'); const ksp = sp.value;
+    sp.innerHTML = '<option value="">(none)</option>';
+    for (const v of (s.speakers||[])) { const o=document.createElement('option'); o.value=v.id; o.textContent=`${v.label||v.id} [${v.scope}]`; sp.appendChild(o); }
+    if (ksp) sp.value = ksp;
+    $('conn').textContent = 'connected'; $('conn').className = 'pill status ok';
+    try {
+      const cd = await fetch(b+'/v2/controls');
+      $('controlsDoc').textContent = cd.ok ? JSON.stringify(await cd.json(), null, 2) : '(not served: '+cd.status+')';
+    } catch(e){ $('controlsDoc').textContent = '(not available)'; }
+  } catch(e) {
+    $('conn').textContent = 'offline'; $('conn').className = 'pill status bad';
+    $('caps').textContent = String(e);
+  }
+}
+
+function float32PcmToWavBlob(buffer, sampleRate=44100) {
+  const pcm = new Float32Array(buffer);
+  const out = new ArrayBuffer(44 + pcm.length * 2);
+  const v = new DataView(out);
+  const w = (o,s)=>{ for(let i=0;i<s.length;i++) v.setUint8(o+i,s.charCodeAt(i)); };
+  w(0,'RIFF'); v.setUint32(4, 36 + pcm.length*2, true); w(8,'WAVE');
+  w(12,'fmt '); v.setUint32(16,16,true); v.setUint16(20,1,true); v.setUint16(22,1,true);
+  v.setUint32(24,sampleRate,true); v.setUint32(28,sampleRate*2,true); v.setUint16(32,2,true); v.setUint16(34,16,true);
+  w(36,'data'); v.setUint32(40, pcm.length*2, true);
+  let off=44; for(let i=0;i<pcm.length;i++,off+=2){ let s=Math.max(-1,Math.min(1,pcm[i])); v.setInt16(off, s<0?s*0x8000:s*0x7fff, true); }
+  return new Blob([out], {type:'audio/wav'});
+}
+
+async function generate() {
+  $('generate').disabled = true; $('saveWav').disabled = true; lastBlob = null;
+  try {
+    const format = $('format').value;
+    const stream = format === 'pcm';
+    const body = {
+      text: $('text').value,
+      language: $('language').value,
+      stream,
+      format,
+      text_normalization: $('text_normalization').checked,
+      decode_context: $('decode_context').checked,
+      laci: $('laci').checked,
+      temperature: num('temperature'), topk: num('topk'), top_p: num('top_p'), min_p: num('min_p'),
+      repetition_penalty: num('repetition_penalty'), repetition_window: num('repetition_window'), repetition_codebooks: num('repetition_codebooks'),
+      fade_out_ms: num('fade_out_ms') ?? 0,
+      decode_context_frames: num('decode_context_frames') ?? 30,
+      stream_codebooks: num('stream_codebooks') ?? 1,
+      stream_codebooks_scope: $('stream_codebooks_scope').value,
+      speaker_cfg_scale: num('speaker_cfg_scale') ?? 1,
+      controls_cfg_scale: num('controls_cfg_scale') ?? 1,
+      tag_cfg_scale: num('tag_cfg_scale') ?? 1,
+      accent_strength: num('accent_strength') ?? 1,
+      control_span_follow: $('control_span_follow').value,
+    };
+    for (const k of ['seed','max_tokens','silence_prefill_frames','headroom_db','control_span_rate','control_span_lead','control_span_lag','speaker_blend_t']) { const v=num(k); if (v!==null) body[k]=v; }
+    for (const k of ['speaker_mode','stream_decode','decoder','accent','speaker_embedding_id','speaker_blend_embedding_id_a','speaker_blend_embedding_id_b']) { const v=str(k); if (v!==null) body[k]=v; }
+    if (!$('speaker_embedding_id').value && $('speaker').value) body.speaker_embedding_id = $('speaker').value;
+    const controls = jsonField('controls', null); if (controls && Object.keys(controls).length) body.controls = controls;
+    const spans = jsonField('control_spans', null); if (spans && spans.length) body.control_spans = spans;
+    const cb = jsonField('condition_buckets', null); if (cb!==null) body.condition_buckets = cb;
+    const cv = jsonField('condition_values', null); if (cv!==null) body.condition_values = cv;
+    const ab64 = await fileB64($('speaker_audio')); if (ab64) { body.speaker_audio_base64 = ab64; body.speaker_audio_name = $('speaker_audio').files[0].name; }
+    const eb64 = await fileB64($('speaker_embedding_file')); if (eb64) { body.speaker_embedding_base64 = eb64; body.speaker_embedding_name = $('speaker_embedding_file').files[0].name; }
+
+    log('Requesting ' + baseUrl() + '/v2/generate ...');
+    const res = await fetch(baseUrl() + '/v2/generate', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+    if (!res.ok) {
+      let detail = await res.text();
+      try { detail = JSON.stringify(JSON.parse(detail), null, 2); } catch {}
+      throw new Error('HTTP '+res.status+'\n'+detail);
+    }
+    const seed = res.headers.get('X-Seed');
+    const dec = res.headers.get('X-Decoder');
+    if (format === 'wav') {
+      lastBlob = await res.blob(); lastName = 'ergo-v3.wav';
+      $('player').src = URL.createObjectURL(lastBlob);
+      log('Done. seed='+seed+' decoder='+dec+' ('+lastBlob.size+' bytes wav)', 'status ok');
+    } else {
+      const buf = await res.arrayBuffer();
+      lastBlob = float32PcmToWavBlob(buf, 44100); lastName = 'ergo-v3-from-pcm.wav';
+      $('player').src = URL.createObjectURL(lastBlob);
+      log('Done. seed='+seed+' decoder='+dec+' ('+buf.byteLength+' bytes pcm -> wav for playback)', 'status ok');
+    }
+    $('saveWav').disabled = !lastBlob;
+  } catch(e) {
+    log(String(e && e.stack || e), 'status bad');
+  } finally {
+    $('generate').disabled = false;
+  }
+}
+
+$('refresh').onclick = refresh;
+$('generate').onclick = generate;
+$('base').oninput = syncLinks;
+$('saveWav').onclick = () => { if(!lastBlob) return; const a=document.createElement('a'); a.href=URL.createObjectURL(lastBlob); a.download=lastName; a.click(); };
+$('format').onchange = () => { /* wav requires stream false in API; handled in request body */ };
+syncLinks();
+refresh();
+</script>
+</body>
+</html>

@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark light" />
+    <title>Ergo-V3 Voice</title>
+    <link rel="icon" href="/icons/icon.svg" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <script src="/theme-boot.js"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Ergo-V3 Voice">
+        <span class="brand-sep" aria-hidden="true"></span>
+        <span class="brand-product">Voice</span>
+      </a>
+      <div class="topbar-right">
+        <button type="button" id="theme" class="icon-btn" aria-label="Theme"></button>
+      </div>
+    </header>
+
+    <main class="home">
+      <header class="page-head home-head">
+        <span class="eyebrow">Ergo-V3 Voice</span>
+        <h1>What do you want to open?</h1>
+      </header>
+
+      <nav class="choices" aria-label="Apps">
+        <a class="panel choice" href="/studio" data-keep-query>
+          <span class="choice-icon" data-icon="sliders"></span>
+          <span class="choice-name">Voice Studio</span>
+          <span class="choice-text">Design voices, direct a script with one or many voices and edit recorded speech.</span>
+          <span class="choice-acts">Cast · Direct · Edit</span>
+        </a>
+        <a class="panel choice" id="choice-lite" href="/lite" data-keep-query>
+          <span class="choice-icon" data-icon="mic"></span>
+          <span class="choice-name">Voice Cloning</span>
+          <span class="choice-text">Pick, upload or record a voice and hear it say your text.</span>
+          <span class="choice-acts">One page</span>
+        </a>
+      </nav>
+      <p id="server-line" class="muted small home-server" role="status" aria-live="polite"></p>
+    </main>
+    <script type="module" src="/src/home/main.ts"></script>
+  </body>
+</html>

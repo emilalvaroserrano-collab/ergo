@@ -1,0 +1,60 @@
+# cache
+/.cache/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache
+.ruff_cache
+.coverage
+
+# installed packages
+*.dist-info/
+*.egg-info/
+
+# profiling data
+*.nsys-rep
+*.ncu-rep
+htmlcov/
+
+# binaries
+build/
+dist/
+# the studio's production build is committed (served from a checkout without Node)
+!/studio/dist/
+*.tar.gz
+
+# virtual environment
+.venv*/
+venv/
+env/
+
+# clangd config
+.clangd
+
+# .vscode
+.vscode/
+
+# logs
+/logs
+
+# locally converted model checkpoints
+/checkpoints/
+
+# golden dumps and parity scratch (tools/dump_golden.py, compare_golden.py)
+/out/
+
+# personal files
+assets/default_voices/*
+!assets/default_voices/AmericanFemale.mp3
+!assets/default_voices/AmericanMale.mp3
+!assets/default_voices/BritishFemale.mp3
+!assets/default_voices/*.codes.npy
+!assets/default_voices/*.embedding.npy
+# The release voices, one folder per language (the clips of gguf/voices/ of Zyphra/ZONOS3-Mini).
+!assets/default_voices/*/
+!assets/default_voices/README.md
+assets/steering/**/pooled.npz
+/node_modules/
+
+# macOS metadata
+.DS_Store

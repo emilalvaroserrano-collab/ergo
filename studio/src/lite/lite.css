@@ -1,0 +1,317 @@
+/* Lite page: the studio's tokens, shell and primitives (styles/base.css) plus this one-column layout. */
+@import '../styles/base.css';
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  height: 54px;
+}
+.brand {
+  text-decoration: none;
+}
+
+.lite {
+  display: grid;
+  gap: 14px;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 36px 18px 56px;
+}
+.lite-head {
+  margin-bottom: 8px;
+}
+
+/* Cards */
+.lite .panel {
+  padding: 14px 18px 18px;
+  transition: opacity var(--t) var(--ease);
+}
+.lite .panel[inert] {
+  opacity: 0.45;
+}
+.lite .panel-head {
+  margin-bottom: 4px;
+  min-height: 34px;
+}
+.step {
+  display: grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  font: 500 10.5px var(--mono);
+  letter-spacing: 0;
+  border: 1px solid var(--o);
+  color: var(--o-hi);
+}
+
+/* The voice-source switch: the studio's .mode pill over radio inputs. */
+fieldset.mode {
+  margin: 0;
+  min-width: 0;
+}
+.mode input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+.mode-btn {
+  font-size: 13px;
+  font-weight: 500;
+}
+.mode-btn:hover {
+  color: var(--text);
+}
+.mode input:checked + .mode-btn {
+  background: var(--surface-3);
+  color: var(--text);
+}
+.mode input:focus-visible + .mode-btn {
+  outline: 2px solid var(--o);
+  outline-offset: 2px;
+}
+.mode input:disabled + .mode-btn {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* The consent card (no server: the in-browser engine asks before its download). */
+.consent {
+  display: grid;
+  gap: 8px;
+}
+.consent h3 {
+  margin: 0;
+}
+.consent p {
+  margin: 0;
+}
+/* Microphone level beside Record. */
+.rec-level-inline {
+  position: static;
+  display: inline-block;
+  width: 56px;
+  height: 6px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--text-3) 25%, transparent);
+}
+.rec-level-inline > span {
+  display: block;
+  height: 100%;
+  background: var(--o);
+  transition: width 80ms linear;
+}
+/* Earlier takes under the waveform. */
+.takes {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+.take-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+}
+.take-row .meta {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lite .wave:focus-visible {
+  outline: 2px solid var(--o);
+  outline-offset: 2px;
+}
+
+/* Fields */
+.field {
+  display: block;
+  margin: 14px 0 6px;
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-3);
+}
+.hint-inline {
+  font-size: 12px;
+  color: var(--text-3);
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
+}
+.field .hint-inline {
+  margin-left: 6px;
+}
+.input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+select.input,
+input.input {
+  height: 34px;
+}
+.row.nowrap {
+  flex-wrap: nowrap;
+}
+.row.nowrap .input {
+  flex: 1;
+  min-width: 0;
+}
+.row .btn,
+.row .hint-inline {
+  flex: none;
+}
+a.btn {
+  text-decoration: none;
+}
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 12px;
+}
+.actions {
+  margin-top: 16px;
+}
+
+/* The chosen voice */
+.chosen {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+.chosen-name {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  min-width: 0;
+}
+.chosen-name strong {
+  font-weight: 500;
+  font-size: 15px;
+  color: var(--o-hi);
+}
+.btn.is-playing {
+  border-color: var(--o);
+  color: var(--o-text);
+}
+
+/* Messages */
+.notice {
+  margin: 0;
+  padding: 9px 14px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-s);
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 13px;
+}
+.notice.bad {
+  background: color-mix(in srgb, var(--bad) 10%, transparent);
+  border-color: color-mix(in srgb, var(--bad) 40%, transparent);
+  color: var(--bad-text);
+}
+/* Sticky under the top bar: a clip voice's first Generate (at the bottom) downloads the encoders here. */
+.download {
+  position: sticky;
+  top: 66px;
+  z-index: 5;
+  padding: 12px 14px;
+  box-shadow: var(--shadow);
+}
+.download .dl {
+  width: 100%;
+}
+.error-box {
+  overflow-wrap: anywhere;
+}
+p.error-box {
+  margin: 12px 0 0;
+}
+
+/* Result: the studio's preview waveform (orange bars, playhead) and its transport */
+.result {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+.result .wave {
+  height: 72px;
+  color: var(--o);
+}
+.result .wave canvas {
+  width: 100%;
+  height: 72px;
+}
+.meta {
+  flex: 1;
+  min-width: 0;
+  font: 12px var(--mono);
+  color: var(--text-3);
+}
+
+@media (max-width: 760px) {
+  .brand .brand-wordmark,
+  .brand .brand-version,
+  .brand-sep,
+  .brand-product {
+    display: none;
+  }
+  .brand .brand-mark {
+    display: block;
+  }
+  .lite {
+    padding-top: 24px;
+  }
+  .lite .panel-head {
+    flex-wrap: wrap;
+  }
+  .grid {
+    grid-template-columns: 1fr;
+  }
+  .row.nowrap {
+    flex-wrap: wrap;
+  }
+}
+
+.hint-inline.is-warn {
+  color: var(--warn);
+}
+#backend {
+  cursor: pointer;
+  background: none;
+}
+@media (max-width: 760px) {
+  /* Phones: no zoom on focus (16 px inputs), 40 px targets, a short pill. */
+  .lite .input,
+  .lite textarea.input,
+  .lite select.input {
+    font-size: 16px;
+    min-height: 40px;
+  }
+  .lite .btn,
+  .lite .icon-btn,
+  .lite .mode-btn,
+  .lite .link {
+    min-height: 40px;
+  }
+  #backend .pill-text {
+    max-width: 64px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}

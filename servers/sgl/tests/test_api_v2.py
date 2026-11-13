@@ -1,0 +1,390 @@
+"""The v2 HTTP surface of the sgl server against servers/api/openapi.json, with a stub frontend (no model): request models
+transcribe the spec, routes live under /v1 and /v2 only, and the generate / speech / speaker responses take the
+v2 shapes (format, X-Seed, voice ids)."""
+
+from __future__ import annotations
+
+import io
+import json
+import wave
+from pathlib import Path
+from types import SimpleNamespace
+
+import numpy as np
+import pytest
+
+api_server = pytest.importorskip("zonos3_sgl.server.api_server")
+TestClient = pytest.importorskip("fastapi.testclient").TestClient
+from zonos3.server import schemas  # noqa: E402
+
+SPEC = json.loads((Path(__file__).resolve().parents[3] / "servers" / "api" / "openapi.json").read_text())
+CODEC = "opus_dual_3n_600k_sched600k_r4096_step600000"
+
+
+@pytest.mark.parametrize(
+    "name, model",
+    [
+        ("GenerateRequest", schemas.GenerateRequest),
+        ("SpeechRequest", schemas.SpeechRequest),
+        ("ControlSpan", schemas.ControlSpan),
+        ("SpeakerCreateRequest", schemas.SpeakerCreateRequest),
+        ("PhonemizeRequest", schemas.PhonemizeRequest),
+        ("EditTranscribeRequest", schemas.EditTranscribeRequest),
+        ("EditAlignRequest", schemas.EditAlignRequest),
+        ("EditWordIn", schemas.EditWordIn),
+        ("EditRequest", schemas.EditRequest),
+        ("ProjectPutRequest", schemas.ProjectPutRequest),
+    ],
+)
+def test_request_models_transcribe_the_spec(name, model):
+    schema = SPEC["components"]["schemas"][name]
+    assert schema["additionalProperties"] is False
+    fields = model.model_fields
+    assert set(fields) == set(schema["properties"])
+    assert {n for n, f in fields.items() if f.is_required()} == set(schema.get("required", ()))
+    for prop, spec in schema["properties"].items():
+        if "default" in spec:
+            assert fields[prop].get_default(call_default_factory=True) == spec["default"], prop
+
+
+def _config(tmp_path, **extra):
+    fields = {
+        "model_path": str(tmp_path / "lm"),
+        "model_config": SimpleNamespace(
+            audio_codec=CODEC,
+            speaker_enabled=True,
+            speaker_embedding_dim=3,
+            speaker_reference_prefix_enabled=False,
+            condition_tokens_enabled=False,
+            span_end_id=None,
+            text_extra_tokens=0,
+            hidden_size=4,
+            n_codebooks=10,
+            audio_pad_id=4097,
+            codebook_sizes=(4096,) * 10,
+        ),
+        "max_seq_len": 4096,
+        "tts_n_codebooks": 10,
+        "tts_audio_pad_id": 4097,
+        "tts_audio_codec": CODEC,
+        "tts_default_voices_dir": None,
+        "studio_projects_dir": None,
+        "studio_dir": str(tmp_path / "studio"),
+        "accent_adapters": None,
+        "steer_bundle": None,
+        "laci_heads": {},
+        "share_tokenizer": True,  # ServerArgs with --num-tokenizer 0 (serve.sh): the frontend sends TTSNormalizeMsg
+    }
+    return SimpleNamespace(**{**fields, **extra})
+
+
+class _Frontend:
+    def __init__(self, config):
+        self.config = config
+        self.sent = []
+        self.hints = []  # TTSNormalizeMsg: warms the tokenizer's normalizer memo, submits nothing
+
+    def new_user(self):
+        return len(self.sent) + 1
+
+    async def send_one(self, message):
+        (self.hints if isinstance(message, api_server.TTSNormalizeMsg) else self.sent).append(message)
+
+    async def stream_tts_audio(self, uid, **kwargs):
+        yield np.full(8, 0.25, dtype=np.float32).tobytes()
+
+    async def wait_for_tts_audio(self, uid, **kwargs):
+        return np.array([0.5, -2.0, 2.0, 0.0], dtype=np.float32).tobytes()
+
+    async def abort_user(self, uid):
+        pass
+
+
+@pytest.fixture
+def frontend(tmp_path, monkeypatch):
+    voices = tmp_path / "voices"
+    voices.mkdir()
+    np.save(voices / "Alice.npy", np.array([0.25, 0.5, 0.75], dtype=np.float32))
+    state = _Frontend(_config(tmp_path, tts_default_voices_dir=str(voices)))
+    monkeypatch.setattr(api_server, "_GLOBAL_STATE", state)
+    monkeypatch.setattr(api_server, "_text_tokenizer_spec", lambda config: None)
+    monkeypatch.delenv("ZONOS3_ACCESS_TOKEN", raising=False)
+    api_server._DEFAULT_SPEAKER_CACHE.clear()
+    api_server._SESSION_SPEAKER_CACHE.clear()
+    return state
+
+
+@pytest.fixture
+def client(frontend):
+    return TestClient(api_server.app)
+
+
+def test_meta_routes(client, frontend):
+    assert client.get("/v2/health").json() == {"status": "ok"}
+    assert client.get("/v1/models").json() == {
+        "object": "list",
+        "data": [{"id": "zonos3", "object": "model", "created": 0, "owned_by": "zyphra", "root": "lm"}],
+    }
+    exposed = client.get("/v2/health", headers={"Origin": "https://x.example"}).headers["access-control-expose-headers"]
+    assert "X-Seed" in exposed and "X-Decoder" in exposed
+
+
+@pytest.mark.parametrize(
+    "method, path",
+    [
+        ("GET", "/v1"),
+        ("POST", "/v1"),
+        ("POST", "/tts/generate"),
+        ("GET", "/tts/capabilities"),
+        ("GET", "/projects"),
+        ("GET", "/studio/"),
+        ("GET", "/docs"),
+        ("GET", "/redoc"),
+        ("GET", "/openapi.json"),
+        ("GET", "/v2/nope"),
+    ],
+)
+def test_removed_paths_are_404(client, method, path):
+    r = client.request(method, path)
+    assert r.status_code == 404 and isinstance(r.json()["detail"], str)
+
+
+def test_studio_cache_rule(client, tmp_path):
+    studio = tmp_path / "studio"
+    (studio / "assets").mkdir(parents=True)
+    for page in ("index", "studio", "lite"):
+        (studio / f"{page}.html").write_text(f'<div id="{page}"></div>')
+    (studio / "assets" / "index-abc.js").write_text("export {}")
+    # / is the chooser; /studio and /lite are their pages, with or without .html
+    for path, page in (
+        ("/", "index"),
+        ("/studio", "studio"),
+        ("/studio.html", "studio"),
+        ("/lite", "lite"),
+        ("/lite.html", "lite"),
+    ):
+        r = client.get(path)
+        assert r.status_code == 200 and r.headers["content-type"].startswith("text/html"), path
+        assert r.headers["cache-control"] == "no-store, max-age=0", path
+        assert f'id="{page}"' in r.text, path
+    r = client.get("/assets/index-abc.js")
+    assert r.status_code == 200 and r.headers["cache-control"] == "public, max-age=31536000, immutable"
+    # unhashed files: the service worker and the manifest are never stored, the rest is revalidated
+    (studio / "icons").mkdir()
+    for name in ("sw.js", "manifest.webmanifest", "icons/icon.svg", "theme-boot.js"):
+        (studio / name).write_text("x")
+    for path, cache in (
+        ("/sw.js", "no-store, max-age=0"),
+        ("/manifest.webmanifest", "no-store, max-age=0"),
+        ("/icons/icon.svg", "no-cache"),
+        ("/theme-boot.js", "no-cache"),
+    ):
+        assert client.get(path).headers["cache-control"] == cache, path
+    for path in ("/nope.html", "/nope", "/assets/index-abc"):
+        assert client.get(path).status_code == 404, path
+
+
+def test_generate_streams_pcm_with_the_drawn_seed(client, frontend):
+    r = client.post("/v2/generate", json={"text": "hi"})
+    assert r.status_code == 200 and r.headers["x-audio-format"] == "float32"
+    (msg,) = frontend.sent
+    assert r.headers["x-seed"] == str(msg.sampling_params.seed) and 0 <= msg.sampling_params.seed < 2**31
+    assert np.frombuffer(r.content, dtype="<f4").tolist() == [0.25] * 8
+
+
+def test_generate_without_decoder_uses_the_default(client, frontend):
+    r = client.post("/v2/generate", json={"text": "hi"})
+    (msg,) = frontend.sent
+    assert r.status_code == 200 and r.headers["x-decoder"] == "keep2_plain"
+    assert msg.sampling_params.decoder == "keep2_plain"
+
+
+@pytest.mark.parametrize("stream", [True, False])
+def test_generate_routes_the_requested_decoder(client, frontend, stream):
+    r = client.post("/v2/generate", json={"text": "hi", "stream": stream, "decoder": "full_mr"})
+    (msg,) = frontend.sent
+    assert r.status_code == 200 and r.headers["x-decoder"] == "full_mr"
+    assert msg.sampling_params.decoder == "full_mr"
+
+
+def test_unknown_decoder_is_400(client, frontend):
+    r = client.post("/v2/generate", json={"text": "hi", "decoder": "nope"})
+    assert r.status_code == 400
+    assert r.json()["detail"] == "Unknown decoder 'nope'; this server serves: keep2_plain, full_mr."
+    assert not frontend.sent
+    r = client.post("/v1/audio/speech", json={"model": "m", "input": "hi", "decoder": "nope"})
+    assert r.status_code == 400 and r.json()["detail"].startswith("Unknown decoder 'nope'")
+    r = client.post("/v2/edit", json={"audio_base64": "AAAA", "target_text": "hi", "decoder": "nope"})
+    assert r.status_code == 400
+    assert r.json()["detail"] == "Unknown decoder 'nope'; this server serves: keep2_plain, full_mr."
+
+
+def test_decoders_flag_restricts_the_served_decoders(client, frontend, monkeypatch):
+    import asyncio
+
+    monkeypatch.setattr(frontend.config, "tts_decoders", ("keep2_plain",), raising=False)
+    r = client.post("/v2/generate", json={"text": "hi", "decoder": "full_mr"})
+    assert r.status_code == 400 and r.json()["detail"] == "Unknown decoder 'full_mr'; this server serves: keep2_plain."
+    caps = asyncio.run(api_server.tts_capabilities())
+    assert [d["id"] for d in caps["decoders"]] == ["keep2_plain"]
+    monkeypatch.setattr(frontend.config, "tts_decoders", ("full_mr",))
+    r = client.post("/v2/generate", json={"text": "hi"})
+    assert r.status_code == 200 and r.headers["x-decoder"] == "full_mr"
+    assert asyncio.run(api_server.tts_capabilities())["decoder"]["id"] == "full_mr"
+
+
+def test_generate_sends_the_text_ahead_under_the_tokenizers_normalization_key(client, frontend):
+    text = "Call 555\nnow."
+    assert client.post("/v2/generate", json={"text": text, "language": "EN-US"}).status_code == 200
+    (msg,) = frontend.sent
+    # the memo key the tokenizer later normalizes with: the request text as sent, the normalized language
+    assert [(h.text, h.language) for h in frontend.hints] == [(msg.text, msg.language)] == [(text, "en_us")]
+    frontend.hints.clear()
+    assert client.post("/v2/generate", json={"text": text, "text_normalization": False}).status_code == 200
+    assert not frontend.hints
+
+
+def test_generate_wav_is_buffered_pcm16_and_clipped(client, frontend):
+    r = client.post("/v2/generate", json={"text": "hi", "stream": False, "format": "wav", "seed": 4294967295})
+    assert r.status_code == 200 and r.headers["content-type"].startswith("audio/wav")
+    assert r.headers["x-audio-format"] == "pcm16" and r.headers["x-seed"] == "4294967295"
+    assert frontend.sent[0].sampling_params.seed == 4294967295
+    with wave.open(io.BytesIO(r.content)) as w:
+        assert (w.getframerate(), w.getnchannels(), w.getsampwidth()) == (44100, 1, 2)
+        samples = np.frombuffer(w.readframes(w.getnframes()), dtype="<i2")
+    assert samples.tolist() == [16384, -32767, 32767, 0]  # 0.5 * 32767 = 16383.5 rounds half to even
+
+
+def test_stream_with_wav_is_400(client, frontend):
+    r = client.post("/v2/generate", json={"text": "hi", "format": "wav"})
+    assert r.status_code == 400 and r.json()["detail"]
+    assert not frontend.sent
+
+
+@pytest.mark.parametrize("frames", [31, -1])
+def test_silence_prefill_outside_the_registry_range_is_400(client, frontend, frames):
+    r = client.post("/v2/generate", json={"text": "hi", "silence_prefill_frames": frames})
+    assert r.status_code == 400 and r.json()["detail"]
+    assert not frontend.sent
+
+
+@pytest.mark.parametrize("frames", [0, 30])
+def test_silence_prefill_in_range_reaches_the_tokenizer(client, frontend, frames):
+    r = client.post("/v2/generate", json={"text": "hi", "silence_prefill_frames": frames})
+    assert r.status_code == 200 and frontend.sent[0].silence_prefill_frames == frames
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"no_such_field": 1},
+        {"speed": 1.0},
+        {"prepend_silence": True},
+        {"quality_buckets": {"a": 1}},
+        {"speaking_rate_bucket": 2},
+        {"clean_speaker_background": True},
+        {"accurate_mode": True},
+        {"speaker_wav_base64": "AAAA"},
+        {"seed": -1},
+        {"seed": 2**32},
+        {"headroom_db": 25},
+        {"tag_cfg_scale": 5},
+        {"speaker_mode": "x"},
+        {"stream_decode": "x"},
+        {"format": "mp3"},
+        {"speaker_blend_t": 2},
+        {"speaker_reference_codes": []},
+        {"control_spans": [{"start": -1, "end": 2, "controls": {}}]},
+        {"emotion_enabled": True},
+        {"emotion_cfg_scale": 2.0},
+    ],
+)
+def test_schema_violations_are_422(client, frontend, fields):
+    r = client.post("/v2/generate", json={"text": "hi", **fields})
+    assert r.status_code == 422 and r.json()["detail"][0]["loc"][0] == "body"
+    assert not frontend.sent
+
+
+def _default_voice(client):
+    (voice,) = client.get("/v2/speakers").json()["speakers"]
+    return voice
+
+
+def test_speakers_take_the_v2_shape(client):
+    voice = _default_voice(client)
+    assert voice == {
+        "id": voice["id"],
+        "label": "Alice",
+        "source_type": "embedding",
+        "scope": "default",
+        "is_default": True,
+        "original_name": "Alice.npy",
+        "created_at": voice["created_at"],
+        "has_preview": False,
+        "speaker_modes": ["embedding"],
+        "embedding_dim": 3,
+        "transcript": None,
+        "disabled_controls": [],
+    }
+    assert client.post("/v2/speakers", json={"label": "x"}).status_code == 400  # no session header
+    assert client.post("/v2/speakers", json={"speaker_wav_base64": "AAAA"}).status_code == 422
+
+
+def test_speech_voice_is_a_speaker_id(client, frontend):
+    voice = _default_voice(client)
+    r = client.post("/v1/audio/speech", json={"model": "anything", "input": "hi", "voice": voice["id"]})
+    assert r.status_code == 200 and r.headers["x-audio-format"] == "float32"
+    (msg,) = frontend.sent
+    assert msg.text == "hi" and msg.speaker_embedding.tolist() == [0.25, 0.5, 0.75]
+    r = client.post("/v1/audio/speech", json={"model": "m", "input": "hi", "response_format": "wav", "seed": 3})
+    assert r.status_code == 200 and r.content[:4] == b"RIFF" and r.headers["x-seed"] == "3"
+    assert r.headers["x-decoder"] == "keep2_plain"
+
+
+def test_speech_voice_from_the_session_cache(client, frontend):
+    entry = api_server.CachedSpeakerReference(
+        speaker_id="spk_1",
+        label="s",
+        source_type="embedding",
+        embedding=api_server.torch.tensor([1.0, 0.0, 0.0]),
+        created_at=0.0,
+    )
+    api_server._SESSION_SPEAKER_CACHE["sess"] = {"spk_1": entry}
+    body = {"model": "m", "input": "hi", "voice": "spk_1"}
+    assert client.post("/v1/audio/speech", json=body).status_code == 400  # another session
+    assert client.post("/v1/audio/speech", json=body, headers={"X-TTS-Session-ID": "sess"}).status_code == 200
+
+
+@pytest.mark.parametrize(
+    "fields, status",
+    [
+        ({"voice": "alloy"}, 400),
+        ({"voice": "alloy", "speaker_audio_base64": "AAAA"}, 400),
+        ({"speed": 1.0}, 422),
+    ],
+)
+def test_speech_refusals(client, frontend, fields, status):
+    r = client.post("/v1/audio/speech", json={"model": "m", "input": "hi", **fields})
+    assert r.status_code == status
+    assert r.json()["detail"]
+    assert not frontend.sent
+
+
+def test_capabilities_drop_the_legacy_keys(frontend):
+    import asyncio
+
+    caps = asyncio.run(api_server.tts_capabilities())
+    assert set(caps) == set(SPEC["components"]["schemas"]["Capabilities"]["required"])
+    assert "prepend_silence" not in json.dumps(caps["silence_prefill"])
+
+
+def test_capabilities_list_every_decoder_default_first(frontend):
+    import asyncio
+
+    caps = asyncio.run(api_server.tts_capabilities())
+    required = SPEC["components"]["schemas"]["DecoderInfo"]["required"]
+    assert [d["id"] for d in caps["decoders"]] == ["keep2_plain", "full_mr"]
+    assert caps["decoder"] == caps["decoders"][0]
+    for info in caps["decoders"]:
+        assert set(required) <= set(info) and info["codec"] == CODEC and info["causal"] and info["headroom_db"] == 3.0
+    assert caps["decoders"][1]["checkpoint"].endswith("autoencoder/heads/full_mr/step_0050000.pt")

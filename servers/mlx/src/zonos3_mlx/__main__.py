@@ -1,0 +1,207 @@
+"""zonos3-mlx-server: the v2 HTTP API on Apple Silicon (MLX) over the ggml server's GGUF files.
+
+python -m zonos3_mlx <model.gguf> [--zac zac-keep2.gguf [--zac zac.gguf]] [--port 1919] [options]
+
+--zac may repeat: every decoder GGUF it names is loaded, the first is the default and a request picks another with
+`decoder` (its id is the GGUF's mossdual_istft.head.variant: keep2_plain, full_mr; two files with one id are refused).
+Without --zac, zac-keep2.gguf (the default keep2_plain head) and zac.gguf (the full-size full_mr head) are loaded when
+they sit next to <model.gguf>. spk-encoder.gguf, zac-encoder.gguf, ssl-teacher.gguf, steer.gguf and accents.gguf are
+auto-detected next to <model.gguf> when their flags are omitted (servers/ggml main.cpp).
+"""
+
+from __future__ import annotations
+
+import argparse
+import logging
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+from zonos3.generation import MAX_FRAMES
+
+from zonos3_mlx import paths
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="python -m zonos3_mlx", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    p.add_argument("model", help="backbone GGUF (backbone-ptq.gguf / backbone-f16.gguf)")
+    p.add_argument(
+        "--zac",
+        action="append",
+        default=None,
+        help="codec decoder GGUF, repeatable (the first is the default; without it zac-keep2.gguf and zac.gguf "
+        "next to the model)",
+    )
+    for flag, help_ in (
+        ("--spk-encoder", "speaker encoder for speaker-embedding cloning of audio voices"),
+        ("--zac-encoder", "reference encoder (raw-reference cloning, speech editing; with --ssl-teacher)"),
+        ("--ssl-teacher", "SSL teacher of the reference encoder"),
+        ("--steer", "steering bundle (steer.gguf): request controls and /v2/controls"),
+        ("--accent-adapters", "accent adapters (accents.gguf): request accent"),
+    ):
+        p.add_argument(flag, default=None, help=help_)
+    p.add_argument("--host", default="127.0.0.1", help="bind address (default 127.0.0.1)")
+    p.add_argument("--port", type=int, default=1919, help="port (default 1919)")
+    p.add_argument(
+        "--max",
+        type=int,
+        default=MAX_FRAMES,
+        help=f"max frames per request (default {MAX_FRAMES}, ~{MAX_FRAMES // 15} s at 15 frames/s)",
+    )
+    p.add_argument(
+        "--batch", type=int, default=4, help="concurrent generation slots (default 4); a CFG request takes two"
+    )
+    p.add_argument(
+        "--reference-idle-unload",
+        type=float,
+        default=60.0,
+        help="free the reference encoder + SSL teacher after N idle seconds (default 60; 0 keeps them)",
+    )
+    p.add_argument(
+        "--tts-default-voices-dir",
+        default=str(paths.DEFAULT_VOICES),
+        help="default voices: audio files (+ <stem>.codes.npy reference codes and <stem>.embedding.npy "
+        "speaker embedding) and .npy/.npz speaker embeddings (default default_voices; empty disables)",
+    )
+    p.add_argument(
+        "--worker-python",
+        default=None,
+        metavar="PY",
+        help="interpreter of the helper workers of model/src/zonos3/workers, each one persistent process: "
+        "the FuseAlign forced aligner of speech editing and plugins (fusealign.py: needs fusealign-hub; "
+        "default this server's interpreter). Speech recognition (asr.py, Qwen3-ASR) runs in .venv-asr "
+        "(tools/setup_asr_env.sh; ZONOS3_ASR_PYTHON)",
+    )
+    p.add_argument(
+        "--laci-heads",
+        nargs="+",
+        default=None,
+        metavar="LANG=PATH",
+        help="LACI alignment heads of a language (repeatable)",
+    )
+    p.add_argument(
+        "--plugins",
+        nargs="+",
+        default=[],
+        metavar="NAME",
+        help="server plugins: import zonos3_<NAME> and mount its routes (e.g. dub, from Zyphra/ZONOS3-dub)",
+    )
+    p.add_argument("--tts-phoneme-lexicon", default=None, help="gold pronunciation lexicon (LMDB) for /v2/phonemize")
+    p.add_argument(
+        "--studio-projects-dir", default=None, help="server-side studio projects and media (/v2/projects, /v2/media)"
+    )
+    p.add_argument("--studio-max-project-bytes", type=int, default=20 * 1024**2)
+    p.add_argument("--studio-max-media-bytes", type=int, default=2 * 1024**3)
+    p.add_argument(
+        "--studio-dir", default=str(paths.STUDIO_DIR), help="studio production build (/ chooser, /studio, /lite)"
+    )
+    p.add_argument("--log-level", default="info")
+    return p
+
+
+def fusealign_available(python: str) -> bool:
+    """Whether the FuseAlign worker's interpreter can import ``fusealign_hub`` (third_party/fusealign-multilingual)."""
+    from zonos3.tts.edit_align import fusealign_installed
+
+    if python == sys.executable:
+        return fusealign_installed()
+    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "VIRTUAL_ENV")}  # as FuseAlignWorker runs it
+    try:
+        probe = subprocess.run(
+            [python, "-c", "import importlib.util, sys; sys.exit(importlib.util.find_spec('fusealign_hub') is None)"],
+            env=env,
+            capture_output=True,
+            timeout=60,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return probe.returncode == 0
+
+
+def main(argv=None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    logging.basicConfig(level=args.log_level.upper(), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+
+    import uvicorn
+    from zonos3.server import plugins
+    from zonos3.server.middleware import access_log_enabled
+    from zonos3.tokenizer.textnorm import load_normalizer
+    from zonos3.tts.edit_align import FuseAlignWorker
+    from zonos3.tts.laci import parse_laci_heads
+    from zonos3.tts.stream import StreamSettings
+
+    from zonos3_mlx.engine import Engine
+    from zonos3_mlx.scheduler import Scheduler
+    from zonos3_mlx.server.app import create_app
+    from zonos3_mlx.server.state import ServerOptions, ServerState
+
+    try:
+        prefix = StreamSettings.from_env()
+        laci = parse_laci_heads(args.laci_heads)
+    except ValueError as exc:
+        parser.error(str(exc))
+    worker_python = args.worker_python or sys.executable
+    normalizer = load_normalizer()
+    engine = Engine.load(
+        args.model,
+        zac=args.zac,
+        spk_encoder=args.spk_encoder,
+        zac_encoder=args.zac_encoder,
+        ssl_teacher=args.ssl_teacher,
+        steer=args.steer,
+        accent_adapters=args.accent_adapters,
+        laci_heads=laci,
+        max_frames=args.max,
+        normalizer=normalizer,
+        reference_idle_unload=args.reference_idle_unload,
+    )
+    voices = Path(args.tts_default_voices_dir) if args.tts_default_voices_dir else None
+    options = ServerOptions(
+        model_path=args.model,
+        batch=args.batch,
+        default_voices_dir=voices,
+        studio_dir=Path(args.studio_dir) if args.studio_dir else None,
+        phoneme_lexicon=args.tts_phoneme_lexicon,
+        prefix=prefix,
+        fusealign=fusealign_available(worker_python),
+        plugins=tuple(args.plugins),
+    )
+    scheduler = Scheduler(engine, batch=args.batch)
+    state = ServerState(engine, scheduler, options, aligner=FuseAlignWorker(python=worker_python))
+    if args.studio_projects_dir:
+        from zonos3.server.projects import ProjectStore
+
+        state.projects = ProjectStore(
+            args.studio_projects_dir, args.studio_max_project_bytes, args.studio_max_media_bytes
+        )
+    if args.tts_phoneme_lexicon:
+        from zonos3.tts.phonemes import PhonemeLexicon
+
+        state.lexicon = PhonemeLexicon(args.tts_phoneme_lexicon)
+    found = {k: Path(v).name for k, v in engine.paths.items() if v}
+    decoders = {name: Path(dec.path).name for name, dec in engine.decoders.items()}
+    logging.getLogger("zonos3_mlx").info(
+        "model %s; decoders %s (default %s); companions %s; batch %d; LACI %s",
+        Path(args.model).name,
+        decoders,
+        engine.decoder.id,
+        found,
+        args.batch,
+        sorted(laci) or "off",
+    )
+    try:
+        state.plugins = plugins.load(options.plugins)
+    except ValueError as exc:
+        parser.error(str(exc))
+    scheduler.start()
+    app = create_app(state)
+    uvicorn.run(app, host=args.host, port=args.port, access_log=access_log_enabled(), log_level=args.log_level)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

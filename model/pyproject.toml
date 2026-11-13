@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "zonos3"
+version = "0.1.0"
+description = "ZONOS3 TTS model: plain-PyTorch reference, codec, speaker encoders, prompt/conditioning and workers"
+requires-python = ">=3.12"
+license = {text = "MIT"}
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "torch",
+    "torchaudio==2.9.1",
+    "descript-audio-codec==1.0.0",
+    "transformers>=4.56.0,<=4.57.3",
+    "huggingface_hub",
+    "pyyaml",
+    "omegaconf",
+    "numpy",
+    "soundfile",
+    "tokenizers",
+    "kernels>=0.12.1",
+    # Rust text normalization, the PyPI wheel; the ggml server builds the same version from third_party/zyphra-textnorm.
+    "zyphra-textnorm==0.1.0",
+    # Gold pronunciation lexicon (LMDB) behind phonemize.
+    "lmdb>=1.4",
+    # Request schemas and studio projects shared by the Python servers (zonos3.server).
+    "fastapi",
+    "pydantic>=2",
+    # FuseAlign forced aligner (third_party/fusealign-multilingual) behind workers/fusealign.py.
+    "fusealign-hub",
+    # ICU word break for the Han / kana words FuseAlign aligns and speech edits diff (zonos3.tts.align_text); the same
+    # dictionaries as the browser's Intl.Segmenter. 2.14 (ICU 76.1) is the last release with macOS 13/14 wheels.
+    "pyicu-wheels>=2.14,<2.15",
+]
+
+[tool.setuptools]
+include-package-data = true
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"zonos3.registries" = ["*.json"]

@@ -1,0 +1,281 @@
+# Ergo-V3
+
+Inference runtime for **Ergo-V3**, a multilingual text-to-speech model: HTTP servers that serve the Ergo-V3 Voice
+Studio, an in-browser WebGPU build and an offline Python API. Model details are in
+[About Ergo-V3](#about-ergo-v3).
+
+[Model weights](https://huggingface.co/Zyphra/ZONOS3-Mini) ·
+[HTTP API](docs/api.md) ·
+[Guide](docs/guide.md) ·
+[Voice Studio](studio/README.md)
+
+## Quick start
+
+### 1. Choose a backend
+
+| Machine | Backend | Setup |
+| --- | --- | --- |
+| Linux x86_64 with an NVIDIA GPU (tested on H100) | CUDA server on [Mini-SGLang](https://github.com/sgl-project/mini-sglang) (`servers/sgl`) | below |
+| Apple Silicon Mac | MLX server (`servers/mlx`) | below; details in [servers/mlx/README.md](servers/mlx/README.md) |
+| CPU, CUDA, Metal or Vulkan, no Python at runtime | C++/ggml server and CLI (`servers/ggml`) | [servers/ggml/README.md](servers/ggml/README.md) |
+| A browser with WebGPU, no server | In-browser server (`servers/web`, the Voice Studio's `?api=web`) | nothing to install: the Voice Studio of any server can run it; to build it, [servers/web/README.md](servers/web/README.md) |
+
+Every server implements the same HTTP API and serves the same Voice Studio.
+
+### 2. Prerequisites
+
+- [uv](https://docs.astral.sh/uv/getting-started/installation/); the project pins Python 3.12.
+- ggml server: a Rust toolchain ([rustup](https://rustup.rs), stable). Its CMake build compiles the text normalizer's C
+  library from the [zyphra-textnorm](https://github.com/Zyphra/zyphra-textnorm) submodule with cargo; the Python servers
+  install the same normalizer's wheel from PyPI.
+- The weights come from the public Hugging Face repo [`Zyphra/ZONOS3-Mini`](https://huggingface.co/Zyphra/ZONOS3-Mini);
+  no token is needed.
+  - CUDA server: the PyTorch weights (`lm/`, `autoencoder/`, `speaker_encoders/`, about 9 GB with the default decoder),
+    downloaded into the Hugging Face cache on first use.
+  - MLX, ggml and in-browser servers: the `gguf/` and `web/` folders.
+- CUDA server: the CUDA 12.8 toolkit (`CUDA_HOME`, default `/usr/local/cuda-12.8`).
+
+### 3. Install
+
+```bash
+git clone --recurse-submodules https://github.com/emilalvaroserrano-collab/ergo.git
+cd ergo
+uv sync --locked --all-packages          # Linux with an NVIDIA GPU
+uv sync --locked --package zonos3-mlx    # Apple Silicon
+```
+
+In an existing checkout, `git submodule update --init third_party/fusealign-multilingual` fetches the FuseAlign
+aligner; the ggml server also needs `servers/ggml/ggml` and the text normalizer, `third_party/zyphra-textnorm`.
+
+### 4. Start a server
+
+```bash
+# Linux with an NVIDIA GPU: the release LM on 127.0.0.1:1919
+servers/sgl/scripts/serve.sh
+
+# Apple Silicon: fetch the GGUF files once (servers/ggml/gguf/), then serve on 127.0.0.1:1919
+hf download Zyphra/ZONOS3-Mini --include 'gguf/*' --local-dir servers/ggml
+servers/mlx/scripts/serve.sh
+```
+
+The first CUDA start JIT-compiles kernels, which takes several minutes.
+Ports, voices, steering and other settings are in [Server configuration](#server-configuration).
+
+### 5. Speak
+
+Open `http://127.0.0.1:1919/` and pick an app: **Ergo-V3 Voice Studio** (`/studio`) or the lightweight voice-cloning
+page `/lite` (pick, upload, record or load a voice embedding, then speak with it; see
+[studio/README.md](studio/README.md#lite-ui)). The standalone control panel in
+[`frontend/`](frontend/index.html) drives the same API from one page: open it and point its base URL at a server
+(default `http://127.0.0.1:7453`, the port [`scripts/deploy-7453.sh`](scripts/deploy-7453.sh) starts).
+
+Or from the command line, with the first default voice and the OpenAI-compatible endpoint:
+
+```bash
+VOICE=$(curl -s http://127.0.0.1:1919/v2/speakers | python3 -c 'import json, sys; print(json.load(sys.stdin)["speakers"][0]["id"])')
+curl -X POST http://127.0.0.1:1919/v1/audio/speech -H 'Content-Type: application/json' \
+  -d "{\"model\": \"ergo-v3\", \"input\": \"Hello from Ergo-V3.\", \"voice\": \"$VOICE\", \"response_format\": \"wav\"}" \
+  --output hello.wav
+```
+
+`voice` is a speaker id of `GET /v2/speakers`; `response_format` is `pcm` (default) or `wav`.
+
+## Generate
+
+`POST /v2/generate` is the native endpoint. Every request should carry a voice: a reference clip
+(`speaker_audio_base64`) or the id of a voice listed by `GET /v2/speakers` (`speaker_embedding_id`). Without one,
+generation is unconditioned.
+
+```bash
+# Request body with a reference clip
+python3 - <<'EOF' > body.json
+import base64, json
+print(json.dumps({"text": "Hello from Ergo-V3.", "language": "en_us", "stream": False,
+                  "speaker_audio_base64": base64.b64encode(open("assets/default_voices/AmericanFemale.mp3", "rb").read()).decode()}))
+EOF
+
+# Whole utterance: raw float32 little-endian PCM, 44.1 kHz mono (the seed used comes back in X-Seed)
+curl -X POST http://127.0.0.1:1919/v2/generate -H 'Content-Type: application/json' -d @body.json --output hello.pcm
+ffmpeg -f f32le -ar 44100 -ac 1 -i hello.pcm hello.wav
+```
+
+`stream: true` returns the audio progressively (an incremental decode of the causal decoder); `"format": "wav"` returns a
+buffered 16-bit WAV instead of raw PCM (with `stream: false`). The API guide is [docs/api.md](docs/api.md); the
+schemas are in [servers/api/openapi.yaml](servers/api/openapi.yaml).
+
+## Offline Python API
+
+```bash
+source servers/sgl/scripts/env.sh
+uv run --locked --package zonos3-sgl python
+```
+
+```python
+from zonos3_sgl.tts import TTSLLM, TTSSamplingParams
+
+# The server's settings: FlashAttention, per-request (naive) cache, and half the GPU for the KV cache so the codec
+# encoder and decoder fit next to it.
+tts = TTSLLM(model_path="hf://Zyphra/ZONOS3-Mini/lm/zonos3_mini",
+             attention_backend="fa", cache_type="naive", memory_ratio=0.5)
+
+result = tts.generate_one("Hello from the offline Python API.", TTSSamplingParams(seed=42), language="en_us")
+tts.save_audio(result["audio"], "offline.wav")
+
+# Clone a voice from a reference clip (raw reference prefix) or a speaker embedding
+(cloned,) = tts.generate(["This is spoken in the cloned voice."], TTSSamplingParams(seed=42),
+                         speaker_reference_audio="assets/default_voices/AmericanFemale.mp3")
+emb = tts.embed_speaker_file("assets/default_voices/AmericanFemale.mp3")
+by_embedding = tts.generate_one("Same voice, from its embedding.", TTSSamplingParams(seed=42), speaker_embedding=emb)
+
+# Stream one prompt as the server streams /v2/generate (silence prefill, prefix codec stream, early first chunk):
+# float32 PCM chunks at 44.1 kHz as soon as they decode
+for chunk in tts.generate_stream("Streamed from the offline API.", TTSSamplingParams(seed=42), speaker_embedding=emb):
+    play(chunk)
+```
+
+The offline path applies the server's text normalization and conditioning (speaker, condition rows, accents, LACI);
+`generate_stream` runs the server's streaming request without the frontend, the tokenizer process and their IPC (its
+first call primes the codec stream and captures its CUDA graphs, as the server's tokenizer does at start).
+
+## Server configuration
+
+`servers/sgl/scripts/serve.sh` sources `servers/sgl/scripts/env.sh` (CUDA toolchain, the TileLang gated-DeltaNet
+backend and the five `ZONOS3_USE_TRAINING_*` exact-mode kernels; on a pre-Hopper GPU such as the A100 it selects the
+portable Triton experts and gated-DeltaNet kernels instead, see
+[docs/tts_architecture.md](docs/tts_architecture.md#gdn--full-attnres-family-2026-10)) and serves the release LM
+`hf://Zyphra/ZONOS3-Mini/lm/zonos3_mini` on `127.0.0.1:1919` with `--attention-backend fa
+--cache-type naive`, two running requests and CUDA graphs. Extra server flags are appended (e.g.
+`servers/sgl/scripts/serve.sh --port 1920`). `servers/mlx/scripts/serve.sh` serves the GGUF files of
+the `gguf/` folder of `Zyphra/ZONOS3-Mini` with the same variables:
+
+| Variable | Effect |
+| --- | --- |
+| `SERVE_MODEL` | Checkpoint directory or `hf://` location (`--model-path`); default the release LM |
+| `SERVE_VOICES` | Default-voice directory (`--tts-default-voices-dir`); default `assets/default_voices/` |
+| `STEER_BUNDLE` | Steering bundle (`--steer-bundle`) behind every steering control (emotion axes, styles, accent directions, word emphasis, …); default `assets/steering/studio_bundle_mect60k_x10.json`, empty serves no controls |
+| `PHONEME_LEXICON` | Gold pronunciation lexicon directory (`--tts-phoneme-lexicon`) for `POST /v2/phonemize` |
+| `ZONOS3_STUDIO_PROJECTS` | Shared studio project store (`--studio-projects-dir`); empty (default) keeps projects in the browser |
+| `LACI_HEADS` | `"lang=path ..."` LACI alignment heads (`--laci-heads`) |
+| `LACI_ALL` | `1` passes LACI heads for every server language, from `LACI_HEADS_DIR` (default `assets/laci_heads/`): the directory's `*_heads.json` for every language, overridden by a `*_heads_<speech code>.json` (`*_heads_zh.json` for Chinese); `en_gb` included |
+| `PLUGINS` | `"name ..."` server plugins (`--plugins`), e.g. `dub` from [Zyphra/ZONOS3-dub](https://github.com/Zyphra/ZONOS3-dub) |
+
+The Voice Studio's steering controls come from `STEER_BUNDLE`.
+
+## Optional features
+
+- **Speech recognition** (optional for speech editing: transcripts of clips sent without one, and `verify`) is
+  Qwen3-ASR (`Qwen/Qwen3-ASR-1.7B`) in its own venv:
+  `bash tools/setup_asr_env.sh` once creates `.venv-asr` (qwen-asr pins its own transformers). One worker process per
+  server (`model/src/zonos3/workers/asr.py`) starts on first use; `ZONOS3_ASR_PYTHON` overrides its interpreter
+  (default `.venv-asr/bin/python`) and `ZONOS3_ASR_DEVICE` its device (default `cuda:0`, else CPU). Without it
+  `/v2/capabilities` reports `edit_transcribe: false`, and editing needs the clip's transcript.
+- **Speech editing** needs the speech-edit LoRA (sgl: `--accent-adapters <dir with z3m_omni3b_edit_lora.pt>` on the
+  release LM; the LoRA is in the private `Zyphra/ZONOS3_Mini`, `lm/rate30_20k_r2grpo/edit_lora/`; see
+  [docs/guide.md](docs/guide.md)) or an edit checkpoint (`SERVE_MODEL=<edit checkpoint>`), and FuseAlign for the word
+  timings. The ggml and MLX servers get it from `gguf/backbone-ptq-edit.gguf` and `gguf/edit/accents.gguf`.
+- **Forced alignment** (speech editing) is the FuseAlign aligner: the submodule `third_party/fusealign-multilingual`
+  ([Zyphra/fusealign-multilingual](https://github.com/Zyphra/fusealign-multilingual), package `fusealign-hub`,
+  Apache-2.0, installed by `uv sync`) and its checkpoint from the Hugging Face repo
+  [`Zyphra/fusealign`](https://huggingface.co/Zyphra/fusealign) (one 1.34 GB file, downloaded on the first alignment).
+  It runs in one worker process per server (`model/src/zonos3/workers/fusealign.py`, the workspace interpreter),
+  started on first use; `ZONOS3_FUSEALIGN_DEVICE` picks its device (default `cuda:0`, else CPU). Recordings over 30 s
+  (or transcripts over 1022 UTF-8 bytes) are aligned long-form, anchored by Qwen3-ASR transcripts of their
+  voice-activity chunks (at most 25 s each), or without speech recognition by FuseAlign's own voice-activity map;
+  FuseAlign's built-in Whisper anchoring is never used.
+- **Phoneme input** needs the release phoneme tokens (private `Zyphra/ZONOS3_Mini`,
+  `lm/rate30_20k_r2grpo/phoneme_tokens/phoneme_tokens_s15000.pt`; sgl / reference `--phoneme-rows`, GGUF
+  `convert_gguf.py lm --phoneme-rows`; `gguf/backbone-ptq-edit.gguf` already has them) or a checkpoint merged with them
+  (`tools/add_text_extra_rows.py`), and `PHONEME_LEXICON=<lexicon dir>` (`lexicons/gold_phonemes_v1` of the same
+  private repo) for "Phonemize selection".
+  `uv sync --group phonemize` adds espeak-ng guesses for `POST /v2/phonemize` (GPL-3.0, opt-in).
+- **Nonverbal tags** need a checkpoint with the NV rows.
+- **Accent adapters** need `--accent-adapters <dir>`.
+
+## About Ergo-V3
+
+Ergo-V3 is an 11-layer language model that mixes gated-DeltaNet layers with global attention (one global layer
+in four), uses Full AttnRes residuals and a latent mixture-of-experts. It reads SuperBPE text tokens and predicts
+10 × 4096 dual-codec audio codes at 15 Hz. A causal multi-resolution iSTFT decoder turns the codes into 44.1 kHz
+audio. Voices are cloned from a raw reference clip (encoded into the same codes) or from a 192-d MECT-B2 speaker
+embedding. It serves 43 languages (44 server codes, with `en_us` and `en_gb` apart) end to end: text
+normalization, pronunciation, speech recognition and forced alignment.
+
+The weights are published as the public Hugging Face repo
+[`Zyphra/ZONOS3-Mini`](https://huggingface.co/Zyphra/ZONOS3-Mini): the release checkpoints, the GGUF files the local
+servers run (including the speech-edit backbone) and the in-browser bundle.
+
+| Feature | Where |
+| --- | --- |
+| HTTP API (`/v2/generate`, `/v1/audio/speech`, `/v2/phonemize`, …) | [docs/api.md](docs/api.md), [servers/api/openapi.yaml](servers/api/openapi.yaml) |
+| Raw-reference and embedding voice cloning, speaker CFG, condition rows | [docs/guide.md](docs/guide.md) |
+| Steering controls (emotion axes, moods, styles, voice quality, accent directions) and accent adapters | [docs/guide.md](docs/guide.md) |
+| Speech editing | [docs/guide.md](docs/guide.md) |
+| Pronunciation input (phoneme tokens) and nonverbal tags with tag CFG | [docs/guide.md](docs/guide.md) |
+| Ergo-V3 Voice Studio, server projects | [docs/guide.md](docs/guide.md), [studio/README.md](studio/README.md) |
+| LACI, duration targets and server plugins (Dub: [Zyphra/ZONOS3-dub](https://github.com/Zyphra/ZONOS3-dub)) | [docs/guide.md](docs/guide.md#plugins) |
+| Feature overview | [docs/features.md](docs/features.md) |
+| Runtime architecture and vocoder | [docs/tts_architecture.md](docs/tts_architecture.md), [docs/structures.md](docs/structures.md) |
+| Release checkpoints and registries | [docs/release_checkpoints.md](docs/release_checkpoints.md) |
+
+## Repository layout
+
+| Path | Contents |
+| --- | --- |
+| `model/` | The `zonos3` package: codec, speaker encoders, prompt / conditioning / steering / LACI code, the speech-editing runtime every server serves, the server plugin seam, registries and the Python workers (speech recognition, forced alignment, the ggml server's Python host) |
+| `servers/sgl/` | The `zonos3-sgl` package (`zonos3_sgl`): the CUDA server built on [Mini-SGLang](https://github.com/sgl-project/mini-sglang), its launch scripts and benchmark |
+| `servers/ggml/` | The C++/ggml server and CLI (CPU, CUDA, Metal, Vulkan); ggml is the submodule `servers/ggml/ggml` |
+| `servers/mlx/` | The `zonos3-mlx` package (`zonos3_mlx`): the Apple Silicon server running the ggml server's GGUF files in MLX |
+| `servers/web/` | The `zonos3-web` package: the in-browser server (WebGPU in a Web Worker, the v2 API behind a fetch-compatible transport) the Voice Studio runs with `?api=web` |
+| `studio/` | Ergo-V3 Voice Studio (Preact, pnpm); `studio/dist/` is the committed production build every server serves at `/` |
+| `frontend/` | The standalone Ergo-V3 control panel (`index.html`): `/v2/generate` with its languages and voices, `/v2/controls` and the server state (`/v2/health`, `/v2/capabilities`), from one page |
+| `scripts/` | Launch helpers: `deploy-7453.sh` starts a server on port 7453 (MLX on Apple Silicon, a built ggml server, or the SGL/CUDA scripts) |
+| `tools/` | Checkpoint and GGUF conversion tools (`zonos3-tools`) |
+| `servers/api/` | The HTTP contract every server implements (`openapi.yaml`, its bundled `openapi.json`) and its conformance tests (`zonos3-api`) |
+| `servers/space/` | The ZeroGPU Hugging Face Space (`app.py`) and its deploy script |
+| `assets/` | Runtime assets shared by the servers: `default_voices/`, `steering/` (steering bundles), `laci_heads/` (LACI alignment heads) |
+| `third_party/` | Third-party license texts (`third_party/licenses/`) and the submodules: FuseAlign and the text normalizer [zyphra-textnorm](https://github.com/Zyphra/zyphra-textnorm) (Rust ports of the NeMo grammars; the ggml server links its C library, the Python servers install its PyPI wheel) |
+
+## Reference model and conversion
+
+`model/` holds a plain-PyTorch implementation of the full generation path (`zonos3.reference`), the numerical oracle
+for both servers. It runs on CPU or GPU:
+
+```bash
+uv run python -m zonos3.reference --model hf://Zyphra/ZONOS3-Mini/lm/zonos3_mini \
+  --text "Hello from the reference." -o ref.wav --device cuda
+```
+
+`--request req.json` takes a v2 `GenerateRequest` instead of `--text`. GGUF files for the ggml server are built from
+the same modules with `uv run --package zonos3-tools python tools/convert_gguf.py <subcommand>` (`--help` lists them).
+Lingua training checkpoints are converted with `tools/convert_lingua_checkpoint.py`.
+
+## Development
+
+The repo is a uv workspace (`model`, `servers/sgl`, `servers/mlx`, `tools`, `servers/api`); the text normalizer comes
+from PyPI (`zyphra-textnorm`), and the `dev` group (installed by default) holds the test tools.
+
+```bash
+source servers/sgl/scripts/env.sh
+uv run --locked --group phonemize pytest
+```
+
+Tests that load weights run when `ZONOS3_TEST_MODEL` names a checkpoint (e.g. the release LM) and a GPU is present.
+The API conformance suite runs against a live server of any kind (tests of capabilities the server lacks skip):
+
+```bash
+uv run --package zonos3-api pytest servers/api/tests/conformance --base-url http://127.0.0.1:1919
+```
+
+The ggml parity tests compare the C++ build with the reference:
+`uv run --package zonos3-tools pytest servers/ggml/tests/parity --ggml-build servers/ggml/build`. On Apple Silicon,
+`uv run --package zonos3-mlx pytest servers/mlx/tests` runs the MLX server's tests (they skip elsewhere).
+`pnpm install` at the root installs the pnpm workspace (`studio`, `studio/mcp`, `servers/web`; one `pnpm-lock.yaml`);
+every `typecheck`, `build` and `test` script regenerates the untracked `src/api/schema.ts` from `servers/api/openapi.json`
+first (`gen:api`). `pnpm --dir servers/web test` runs the in-browser server's unit tests, `pnpm --dir studio/mcp test`
+the MCP server's, and `pnpm --dir servers/web parity` the WebGPU parity checks against CPU ggml goldens in headless
+Chrome.
+
+## License
+
+Ergo-V3 is released under the [MIT License](LICENSE). Third-party components are listed in [`NOTICE`](NOTICE) and
+[`third_party/licenses/`](third_party/licenses/).
