@@ -9,6 +9,11 @@ cd "$repo_root"
 PORT="${PORT:-7453}"
 HOST="${HOST:-127.0.0.1}"
 
+# Tagalog pronunciation lexicon (WikiPron broad transcription): POST /v2/phonemize and the studio's phonemize action.
+if [[ -z "${PHONEME_LEXICON:-}" && -d "$repo_root/assets/lexicons/tagalog.lmdb" ]]; then
+  export PHONEME_LEXICON="$repo_root/assets/lexicons/tagalog.lmdb"
+fi
+
 if [[ "$(uname -s)" == "Darwin" && "$(uname -m)" == "arm64" ]]; then
   export LACI_ALL="${LACI_ALL:-1}"
   export STEER_BUNDLE="${STEER_BUNDLE:-$repo_root/assets/steering/studio_bundle_mect60k_x10.json}"
@@ -38,6 +43,7 @@ elif [[ -x "servers/ggml/build/zonos3-server" || -x "servers/ggml/build-cuda/zon
   for accents in "$models/edit/accents.gguf" "$models/accents.gguf"; do
     [[ -f "$accents" ]] && { args+=(--accent-adapters "$accents"); break; }
   done
+  [[ -d "${PHONEME_LEXICON:-}" ]] && args+=(--tts-phoneme-lexicon "$PHONEME_LEXICON")
   exec "$bin" "${args[@]}" "$@"
 else
   export LACI_ALL="${LACI_ALL:-1}"

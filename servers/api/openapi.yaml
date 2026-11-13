@@ -212,9 +212,9 @@ paths:
       operationId: phonemize
       summary: Gold-lexicon IPA for the words of a text
       description: |
-        With `guess`, espeak-ng fills ambiguous and unknown words of the `phonemize_guess_languages`. On a
-        phoneme-token checkpoint, a pronunciation with a symbol outside its inventory is returned as `unsupported`
-        with no `ipa`. 404 when the server has no lexicon.
+        With `guess`, espeak-ng (or a language's built-in G2P, as for Tagalog) fills ambiguous and unknown words of
+        the `phonemize_guess_languages`. On a phoneme-token checkpoint, a pronunciation with a symbol outside its
+        inventory is returned as `unsupported` with no `ipa`. 404 when the server has no lexicon.
       requestBody:
         required: true
         content:

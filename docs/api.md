@@ -126,8 +126,8 @@ Available when the server runs with `--tts-phoneme-lexicon`. Body:
 `{"text": "...", "language": "en_us", "guess": true}` (a Text Norm language code,
 or a lexicon code such as `rus`). Returns `{"language": "eng", "segments": [...]}`;
 the segment texts concatenate back to the input, and each word segment has
-`status` `ok` (with `ipa`), `guessed` (espeak-ng, with `ipa`), `ambiguous`,
-`unknown`, `skipped` (Japanese/Chinese characters outside any multi-character
+`status` `ok` (with `ipa`), `guessed` (espeak-ng or the built-in Tagalog G2P,
+with `ipa`), `ambiguous`, `unknown`, `skipped` (Japanese/Chinese characters outside any multi-character
 word) or, on a phoneme-token checkpoint, `unsupported` (a symbol the model has no
 token for). `GET /v2/capabilities` reports `phonemize_enabled`,
 `phonemize_languages`, `phonemize_guess_languages` and `phoneme_tokens`

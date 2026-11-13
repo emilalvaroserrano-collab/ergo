@@ -7,7 +7,8 @@ data used (``apps/zonos/build_phoneme_lexicon.py``), so a phonemized word gets
 exactly the notation the model saw. Words whose deciding source has several
 pronunciations are reported as ambiguous. With the optional ``phonemize``
 dependency group installed, espeak-ng guesses ambiguous and unknown words of the
-space-delimited languages, mapped to the lexicon's notation.
+space-delimited languages, mapped to the lexicon's notation; Tagalog uses the
+built-in rule-based G2P because espeak-ng has no Tagalog voice.
 
 The lexicon format is shared with lingua: a ``meta`` JSON record and one named
 DB per language whose keys are ``normalize_headword`` forms and whose values are
@@ -27,6 +28,7 @@ from functools import lru_cache
 import lmdb
 
 from zonos3 import languages
+from zonos3.tts.tagalog import tagalog_ipa
 
 LEXICON_VERSION = 1
 _MAX_KEY_BYTES = 500  # LMDB key limit; the builder skips longer headwords
@@ -37,6 +39,8 @@ SERVER_LANGUAGES = {lang.code: lang.lexicon for lang in languages.SERVER}
 # Lexicon languages espeak-ng can guess. Chinese, Japanese, Korean and Vietnamese
 # are absent: espeak-ng writes their tones as ASCII digits or misreads the script.
 ESPEAK_VOICES = languages.ESPEAK
+# Languages with a built-in guesser, used when espeak-ng has no voice (Tagalog).
+BUILTIN_GUESSERS = {"tgl": tagalog_ipa}
 
 
 def normalize_headword(word: str) -> str:
@@ -100,11 +104,10 @@ class PhonemeLexicon:
 
     @property
     def guess_languages(self) -> list[str]:
-        """Server languages whose unknown words espeak-ng can guess."""
+        """Server languages whose unknown words this server can guess (espeak-ng or a built-in G2P)."""
         espeak = _espeak()
-        if espeak is None:
-            return []
-        return [lang for lang, code in SERVER_LANGUAGES.items() if code in self.languages and code in espeak.voices]
+        available = set(BUILTIN_GUESSERS) | (set() if espeak is None else set(espeak.voices))
+        return [lang for lang, code in SERVER_LANGUAGES.items() if code in self.languages and code in available]
 
     def uses_ties(self, code: str) -> bool:
         """Whether the language's gold IPA writes affricates with a tie bar (t͡s vs ts)."""
@@ -138,12 +141,13 @@ class PhonemeLexicon:
         "ok" (with ``ipa``), "ambiguous" (several pronunciations), "unknown" (not in
         the lexicon) or, for Japanese/Chinese characters outside any multi-character
         word, "skipped"; other text has ``status`` None. With ``guess``, ambiguous
-        and unknown words of an espeak-ng language get its pronunciation instead,
-        with ``status`` "guessed".
+        and unknown words of a language with a guesser (espeak-ng, or the built-in
+        Tagalog G2P) get its pronunciation instead, with ``status`` "guessed".
         """
         code = self.resolve_language(language)
         mode = self.languages[code]["mode"]
-        espeak = _espeak() if guess else None
+        guesser = BUILTIN_GUESSERS.get(code) if guess else None
+        espeak = _espeak() if guess and guesser is None else None
         if espeak is not None and code not in espeak.voices:
             espeak = None
         if mode == "words":
@@ -151,7 +155,9 @@ class PhonemeLexicon:
             for a, b in self._word_spans(text):
                 value = self.get(code, text[a:b])
                 guessed = None
-                if not value and espeak is not None:
+                if not value and guesser is not None:
+                    guessed = guesser(text[a:b])
+                elif not value and espeak is not None:
                     guessed = harmonize_espeak(espeak.ipa(code, text[a:b]), code, self.uses_ties(code))
                 if guessed:
                     spans.append((a, b, guessed, "guessed"))

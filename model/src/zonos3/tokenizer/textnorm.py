@@ -2,7 +2,8 @@
 
 Converts written text to its spoken form ("$5.32" -> "five dollars thirty two cents") before tokenization, in the
 grammar of the request language's ``nemo`` package (registries/languages.json), with the nonverbal markup the model
-reads kept as typed. Disable globally with ZONOS3_TTS_NORM=0, or per request via the text_normalization flag.
+reads kept as typed. Tagalog has no NeMo grammar and uses the native normalizer in ``zonos3.tts.tagalog`` instead.
+Disable globally with ZONOS3_TTS_NORM=0, or per request via the text_normalization flag.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ import zyphra_textnorm
 
 from zonos3 import languages
 from zonos3.tts.markup import NONVERBAL_MARKUP_TAGS
+from zonos3.tts.tagalog import normalize as normalize_tagalog
 
 collapse_line_breaks = zyphra_textnorm.collapse_line_breaks
 
@@ -30,6 +32,8 @@ class TTSTextNormalizer:
 
     def normalize(self, text: str, language: str) -> str:
         lang = languages.BY_CODE.get(language)
+        if lang is not None and lang.code == "tl":
+            return normalize_tagalog(collapse_line_breaks(text))
         # Languages without a NeMo grammar (the registry's empty `nemo`) pass through as written.
         if lang is None or not lang.nemo:
             return collapse_line_breaks(text)

@@ -56,5 +56,8 @@ assets/default_voices/*
 assets/steering/**/pooled.npz
 /node_modules/
 
+# LMDB runtime locks (the lexicon data files are committed assets)
+assets/lexicons/*/lock.mdb
+
 # macOS metadata
 .DS_Store

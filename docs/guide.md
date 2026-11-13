@@ -405,13 +405,16 @@ where edit training put them); `superbpe.load_spec` checks that markers plus the
   has a single pronunciation come from the lexicon; hiragana, okurigana and single
   kanji/hanzi stay as text, as in training. Ambiguous and unknown words of the
   space-delimited languages are guessed by espeak-ng and mapped to the lexicon's
-  notation; the studio lists them as guesses to check. espeak-ng is GPL-3.0: it is the
-  opt-in `phonemize` dependency group (`espeakng-loader`; `uv sync --locked --group
-  phonemize`, and `servers/sgl/scripts/serve.sh` runs with it); without it unknown words stay as
-  text. Chinese, Japanese, Korean and Vietnamese are never guessed.
+  notation; Tagalog has no espeak-ng voice and uses the built-in rule-based G2P in
+  `zonos3.tts.tagalog` instead. The studio lists guesses to check. espeak-ng is
+  GPL-3.0: it is the opt-in `phonemize` dependency group (`espeakng-loader`;
+  `uv sync --locked --group phonemize`, and `servers/sgl/scripts/serve.sh` runs
+  with it); without it unknown words stay as text. Chinese, Japanese, Korean and
+  Vietnamese are never guessed.
 - `/v2/capabilities` on a phoneme checkpoint lists the phone symbols,
-  `phonemize_languages` (the ten Text Norm languages) and the languages espeak-ng
-  guesses for (en_us, en_gb, fr_fr, de, es, it, pt_br). `POST /v2/phonemize`
+  `phonemize_languages` (the languages the lexicon carries) and the languages a
+  guesser covers (`phonemize_guess_languages`; espeak-ng's en_us, en_gb, fr_fr, de,
+  es, it, pt_br, plus Tagalog through its built-in G2P). `POST /v2/phonemize`
   returns each word's pronunciation and whether it was guessed.
 
 ## Nonverbal markup and tag CFG

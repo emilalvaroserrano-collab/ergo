@@ -4,6 +4,7 @@ import json
 
 import lmdb
 import pytest
+import zonos3.tts.phonemes as phonemes
 from zonos3.tts.phonemes import PhonemeLexicon, harmonize_espeak
 
 ENTRIES = {
@@ -11,8 +12,9 @@ ENTRIES = {
     "jpn": {"大事": "daiʑi", "美味": "bimi", "絵": "e", "スポット": "sɯpotːo", "は": "ha"},
     "cmn": {"如果": "ʐu³⁵kuɔ²¹⁴", "我们": "wo²¹⁴mən", "走": "tsoʊ²¹⁴"},
     "kor": {"그": "kɯ", "막": "mak̚"},
+    "tgl": {"mga": "maŋa", "kumusta": "kumusta"},
 }
-MODES = {"eng": "words", "jpn": "japanese", "cmn": "chinese", "kor": "korean"}
+MODES = {"eng": "words", "jpn": "japanese", "cmn": "chinese", "kor": "korean", "tgl": "words"}
 
 
 @pytest.fixture(scope="module")
@@ -86,7 +88,7 @@ def test_korean_looks_up_whole_eojeol(lexicon):
 
 
 def test_language_without_lexicon_is_rejected(lexicon):
-    assert lexicon.server_languages == ["en_us", "en_gb", "cmn", "ja", "ko"]
+    assert lexicon.server_languages == ["en_us", "en_gb", "cmn", "ja", "ko", "tl"]
     with pytest.raises(ValueError):
         lexicon.phonemize("Bonjour", "fr_fr")
 
@@ -108,7 +110,7 @@ def test_espeak_output_is_mapped_to_lexicon_notation(raw, code, ties, expected):
 
 def test_espeak_guesses_ambiguous_and_unknown_words_only(lexicon):
     pytest.importorskip("espeakng_loader")
-    assert lexicon.guess_languages == ["en_us", "en_gb"]
+    assert lexicon.guess_languages == ["en_us", "en_gb", "tl"]
     result = words(lexicon.phonemize("I met Siobhan, read on.", "en_us"))
     assert [(text, ipa) for text, ipa in result if text in ("I", "met", "Siobhan")] == [
         ("I", "aɪ"),
@@ -118,3 +120,21 @@ def test_espeak_guesses_ambiguous_and_unknown_words_only(lexicon):
     statuses = {s["text"]: s["status"] for s in lexicon.phonemize("I met Siobhan, read on.", "en_us")["segments"]}
     assert statuses["Siobhan"] == statuses["read"] == "guessed" and statuses["met"] == "ok"
     assert words(lexicon.phonemize("如果我们走", "cmn"))[-1] == ("走", "skipped")
+
+
+def test_tagalog_uses_the_builtin_g2p_for_unknown_words(lexicon):
+    assert words(lexicon.phonemize("mga Siobhan kumusta", "tl", guess=False)) == [
+        ("mga", "maŋa"),
+        ("Siobhan", "unknown"),
+        ("kumusta", "kumusta"),
+    ]
+    assert words(lexicon.phonemize("mga Siobhan kumusta", "tl")) == [
+        ("mga", "maŋa"),
+        ("Siobhan", "siobhan"),
+        ("kumusta", "kumusta"),
+    ]
+
+
+def test_tagalog_is_guessable_without_espeak(lexicon, monkeypatch):
+    monkeypatch.setattr(phonemes, "_espeak", lambda: None)
+    assert lexicon.guess_languages == ["tl"]
